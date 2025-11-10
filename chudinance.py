@@ -9,7 +9,8 @@ UPDATE_INTERVAL = 300  # seconds (5 minutes)
 API_URL = "https://api.coingecko.com/api/v3/global"
 
 # ---------- DISCORD CLIENT ----------
-intents = discord.Intents.none()
+intents = discord.Intents.default()
+intents.guilds = True
 client = discord.Client(intents=intents)
 
 # ---------- FETCH BTC DOMINANCE ----------
@@ -38,16 +39,16 @@ async def update_btc_dominance_loop():
             btc_dom = await get_btc_dominance()
             formatted = f"{btc_dom:.2f}%"
 
-            # --- Determine trend direction ---
+            # --- Determine trend direction & color emoji ---
             if last_value is not None:
                 if btc_dom > last_value:
-                    arrow = "↑"
+                    arrow = "🟩↑"
                 elif btc_dom < last_value:
-                    arrow = "↓"
+                    arrow = "🟥↓"
                 else:
-                    arrow = "→"
+                    arrow = "🟦→"
             else:
-                arrow = "•"
+                arrow = "⚪•"
 
             last_value = btc_dom
 
@@ -60,12 +61,13 @@ async def update_btc_dominance_loop():
                 status=discord.Status.online
             )
 
-            # --- Try updating nickname in each guild ---
+            # --- Update nickname safely ---
             for guild in client.guilds:
-                me = guild.me
+                me = guild.get_member(client.user.id)
                 if me and guild.me.guild_permissions.change_nickname:
                     try:
                         await me.edit(nick=f"BTC.D {formatted} {arrow}")
+                        print(f"✅ Nickname updated in {guild.name} → BTC.D {formatted} {arrow}")
                     except Exception as e:
                         print(f"⚠️ Could not change nickname in {guild.name}: {e}")
                 else:
