@@ -3,119 +3,87 @@ import asyncio
 import aiohttp
 import discord
 
-# ==============================
-# CONFIGURATION
-# ==============================
-TOKEN = os.environ.get("TOKEN")  # Your Discord bot token
-UPDATE_INTERVAL = 300  # Update every 5 minutes (in seconds)
-COINGECKO_URL = "https://api.coingecko.com/api/v3/global"
+# ---------- CONFIG ----------
+TOKEN = os.environ["TOKEN"]
+UPDATE_INTERVAL = 300  # seconds (5 minutes)
+API_URL = "https://api.coingecko.com/api/v3/global"
 
-# ==============================
-# DISCORD CLIENT SETUP
-# ==============================
+# ---------- DISCORD CLIENT ----------
 intents = discord.Intents.none()
 client = discord.Client(intents=intents)
 
-# Cache last known dominance value to avoid nulls on temporary API failure
-last_btc_dominance = None
-
-
-# ==============================
-# FETCH FUNCTION
-# ==============================
-async def fetch_btc_dominance():
-    """Fetch Bitcoin dominance from CoinGecko's global market data."""
+# ---------- FETCH BTC DOMINANCE ----------
+async def get_btc_dominance():
     async with aiohttp.ClientSession() as session:
-        async with session.get(COINGECKO_URL) as response:
-            if response.status != 200:
-                raise Exception(f"Bad response from API (HTTP {response.status})")
-            data = await response.json()
-            btc_d = data.get("data", {}).get("market_cap_percentage", {}).get("btc")
-            if btc_d is None:
-                raise Exception("BTC dominance not found in API response.")
-            return btc_d
+        async with session.get(API_URL) as resp:
+            if resp.status != 200:
+                raise Exception(f"HTTP {resp.status}")
+            data = await resp.json()
+            return data["data"]["market_cap_percentage"]["btc"]
 
-
-# ==============================
-# PRESENCE UPDATE LOOP
-# ==============================
-async def update_btc_dominance_loop():
-    """Continuously update the bot's presence and nickname with BTC dominance."""
-    global last_btc_dominance
-
-    await client.wait_until_ready()
+# ---------- EVENT: ON READY ----------
+@client.event
+async def on_ready():
+    print(f"🤖 Bot is ready.")
     print(f"✅ Logged in as {client.user}")
+    asyncio.create_task(update_btc_dominance_loop())
+
+# ---------- LOOP: UPDATE PRESENCE ----------
+async def update_btc_dominance_loop():
+    await client.wait_until_ready()
+    last_value = None
 
     while not client.is_closed():
         try:
-            btc_d = await fetch_btc_dominance()
-            last_btc_dominance = btc_d
-            formatted = f"{btc_d:.2f}%"
+            btc_dom = await get_btc_dominance()
+            formatted = f"{btc_dom:.2f}%"
 
-            # Update Discord presence
+            # --- Determine trend direction ---
+            if last_value is not None:
+                if btc_dom > last_value:
+                    arrow = "↑"
+                elif btc_dom < last_value:
+                    arrow = "↓"
+                else:
+                    arrow = "→"
+            else:
+                arrow = "•"
+
+            last_value = btc_dom
+
+            # --- Update presence ---
             await client.change_presence(
                 activity=discord.Activity(
                     type=discord.ActivityType.watching,
-                    name=f"BTC Dominance: {formatted}"
+                    name=f"BTC Dominance: {formatted} {arrow}"
                 ),
                 status=discord.Status.online
             )
 
-            # Update nickname across all guilds
+            # --- Try updating nickname in each guild ---
             for guild in client.guilds:
-                try:
-                    me = guild.me
-                    await me.edit(nick=f"BTC.D {formatted}")
-                except discord.Forbidden:
-                    print(f"⚠️ Missing permission to change nickname in {guild.name}")
+                me = guild.me
+                if me and guild.me.guild_permissions.change_nickname:
+                    try:
+                        await me.edit(nick=f"BTC.D {formatted} {arrow}")
+                    except Exception as e:
+                        print(f"⚠️ Could not change nickname in {guild.name}: {e}")
+                else:
+                    print(f"ℹ️ Skipping nickname change in {guild.name} (no permission or unavailable).")
 
-            print(f"✅ Updated BTC Dominance → {formatted}")
+            print(f"✅ Updated BTC Dominance → {formatted} {arrow}")
 
         except Exception as e:
             print(f"⚠️ Error: {e}")
-
-            # If API fails, keep showing last known data
-            if last_btc_dominance is not None:
-                formatted = f"{last_btc_dominance:.2f}% ⚠️"
-                await client.change_presence(
-                    activity=discord.Activity(
-                        type=discord.ActivityType.watching,
-                        name=f"BTC.D (cached)"
-                    ),
-                    status=discord.Status.online
-                )
-                for guild in client.guilds:
-                    try:
-                        me = guild.me
-                        await me.edit(nick=f"BTC.D {formatted}")
-                    except discord.Forbidden:
-                        pass
-            else:
-                await client.change_presence(
-                    activity=discord.Activity(
-                        type=discord.ActivityType.watching,
-                        name="BTC.D unavailable"
-                    ),
-                    status=discord.Status.idle
-                )
+            await client.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.watching,
+                    name="BTC.D unavailable"
+                ),
+                status=discord.Status.idle
+            )
 
         await asyncio.sleep(UPDATE_INTERVAL)
 
-
-# ==============================
-# EVENT HOOKS
-# ==============================
-@client.event
-async def on_ready():
-    """Event called when the bot connects."""
-    print("🤖 Bot is ready.")
-    client.loop.create_task(update_btc_dominance_loop())
-
-
-# ==============================
-# RUN BOT
-# ==============================
-if not TOKEN:
-    raise SystemExit("❌ ERROR: Discord TOKEN not found in environment variables.")
-else:
-    client.run(TOKEN)
+# ---------- RUN BOT ----------
+client.run(TOKEN)
